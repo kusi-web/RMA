@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <template id="report_rma_document">
+        <t t-call="web.external_layout">
+            <t t-set="doc" t-value="doc.with_context(lang=lang)"/>
+            <div class="page">
+                <h2>
+                    <span>RMA </span>
+                    <span t-field="doc.name"/>
+                </h2>
+                <div class="row mt32 mb32">
+                    <div class="col-6">
+                        <strong>Customer:</strong>
+                        <p t-field="doc.customer_id"/>
+                        <p t-field="doc.customer_id.phone"/>
+                        <p t-field="doc.customer_id.email"/>
+                    </div>
+                    <div class="col-6">
+                        <strong>RMA Details:</strong>
+                        <p>Date: <span t-field="doc.date"/></p>
+                        <p>Reference Invoice: <span t-field="doc.invoice_id"/></p>
+                        <p>Stage: <span t-field="doc.stage_id"/></p>
+                    </div>
+                </div>
+
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Product</th>
+                            <th class="text-right">Invoiced Qty</th>
+                            <th class="text-right">Returned Qty</th>
+                            <th class="text-right">Unit Price</th>
+                            <th class="text-right">Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr t-foreach="doc.rma_line_ids" t-as="line">
+                            <td><span t-field="line.product_id"/></td>
+                            <td class="text-right"><span t-field="line.invoiced_qty"/></td>
+                            <td class="text-right"><span t-field="line.returned_qty"/></td>
+                            <td class="text-right"><span t-field="line.unit_price"/></td>
+                            <td class="text-right"><span t-field="line.total"/></td>
+                        </tr>
+                    </tbody>
+                    <tfoot>
+                        <tr>
+                            <td colspan="4" class="text-right"><strong>Total</strong></td>
+                            <td class="text-right">
+                                <strong><span t-field="doc.total"/></strong>
+                            </td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </t>
+    </template>
+
+    <template id="report_rma">
+        <t t-call="web.html_container">
+            <t t-foreach="docs" t-as="doc">
+                <t t-call="custom_rma.report_rma_document"/>
+            </t>
+        </t>
+    </template>
+</odoo>
