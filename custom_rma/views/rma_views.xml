@@ -5,7 +5,6 @@
         <field name="report_type">qweb-pdf</field>
         <field name="report_name">custom_rma.report_rma</field>
         <field name="report_file">custom_rma.report_rma</field>
-        <field name="print_report_name">'RMA - %s' % object.name</field>
         <field name="binding_model_id" ref="model_custom_rma"/>
         <field name="binding_type">report</field>
     </record>
@@ -19,18 +18,18 @@
                     <button name="action_create_transfer" 
                             string="CREATE TRANSFER" 
                             type="object" 
-                            class="btn-primary"/>
-                            <!-- invisible="['|', ('picking_id', '!=', False), ('stage_id', '!=', %(custom_rma.stage_awaiting_stock)d)]"/> -->
+                            class="btn-primary"
+                            invisible="not stage_id in [%(custom_rma.stage_new)d, %(custom_rma.stage_sent)d]"/>
                     <button name="action_validate_transfer" 
                             string="VALIDATE TRANSFER" 
                             type="object" 
-                            class="btn-primary"/>
-                            <!-- invisible="['|', ('picking_id', '=', False), ('stage_id', '!=', %(custom_rma.stage_awaiting_stock)d)]"/> -->
+                            class="btn-primary"
+                            invisible="stage_id != %(custom_rma.stage_awaiting_stock)d"/>
                     <button name="action_create_credit_note" 
                             string="CREATE CREDIT NOTE" 
                             type="object" 
-                            class="btn-primary"/>
-                            <!-- invisible="[('stage_id', '!=', %(custom_rma.stage_awaiting_credit)d)]"/> -->
+                            class="btn-primary"
+                            invisible="stage_id != %(custom_rma.stage_awaiting_credit)d"/>
                     <field name="stage_id" widget="statusbar" options="{'clickable': '1'}"/>
                 </header>
                 <sheet>
@@ -55,7 +54,7 @@
                             <field name="user_id"/>
                             <field name="tag_ids" widget="many2many_tags" options="{'color_field': 'color'}"/>
                             <field name="company_id"/>
-                            <field name="reason"/>
+                            <field name="reason_id" options="{'no_create': False}" placeholder="Select or create reason..."/>
                         </group>
                     </group>
                     <notebook>
@@ -69,7 +68,7 @@
                                 </list>
                             </field>
                             <group class="oe_subtotal_footer oe_right" colspan="2">
-                                <field name="total" widget="monetary" options="{'currency_field': 'currency_id'}" class="oe_subtotal_footer_separator"/>
+                                <field name="total" type="monetary" options="{'currency_field': 'currency_id'}" class="oe_subtotal_footer_separator"/>
                             </group>
                         </page>
                         <page string="Related Stock Moves">
@@ -78,6 +77,7 @@
                         </page>
                     </notebook>
                 </sheet>
+                <chatter reload_on_follower="True"/>
             </form>
         </field>
     </record>
@@ -108,7 +108,7 @@
                 <field name="stage_id" options='{"group_by_tooltip": {"description": "Description"}}'/>
                 <field name="state"/>
                 <field name="total"/>
-                <field name="reason"/>
+                <field name="reason_id"/>
                 <field name="tag_ids"/>
                 <field name="currency_id"/>
                 <field name="user_id"/>

@@ -20,6 +20,12 @@ class RmaTag(models.Model):
 
     name = fields.Char(string='Tag Name', required=True)
     color = fields.Integer(string='Color Index')
+    
+class ReturnReason(models.Model):
+    _name = 'rma.return.reason'
+    _description = 'Return Reason'
+
+    name = fields.Char(required=True)
 
 class CustomRma(models.Model):
     _name = 'custom.rma'
@@ -28,19 +34,15 @@ class CustomRma(models.Model):
 
     active = fields.Boolean(default=True, string='Active')
     name = fields.Char(required=True, tracking=True)
-    customer_id = fields.Many2one('res.partner', string='Customer', required=True)
+    customer_id = fields.Many2one('res.partner', string='Customer', required=True, tracking=True)
     phone = fields.Char(related='customer_id.phone')
     email = fields.Char(related='customer_id.email')
     invoice_id = fields.Many2one('account.move', string='Invoices', domain="[('move_type','=','out_invoice')]")
     company_id = fields.Many2one('res.company', string='Company', default=lambda self: self.env.company)
     date = fields.Date(string='Date', default=fields.Date.context_today, tracking=True)
-    user_id = fields.Many2one('res.users', string='Responsible', default=lambda self: self.env.user)
-    currency_id = fields.Many2one('res.currency', string='Currency', default=lambda self: self.env.company.currency_id)
-    reason = fields.Selection([
-        ('picking_error', 'Picking Error'),
-        ('customer_order_error', 'Customer Order Error'),
-        ('order_delivered', 'Order Delivered'),
-    ], string="Reason", tracking=True)
+    user_id = fields.Many2one('res.users', string='Responsible', default=lambda self: self.env.user, tracking=True)
+    currency_id = fields.Many2one('res.currency', string='Currency', default=lambda self: self.env.company.currency_id, tracking=True)
+    reason_id = fields.Many2one('rma.return.reason', string="Reason", tracking=True)
     state = fields.Selection([
         ('normal', 'In Progress'),
         ('done', 'Ready'),
@@ -49,8 +51,8 @@ class CustomRma(models.Model):
 
     rma_line_ids = fields.One2many('custom.rma.line', 'rma_id', string='RMA Lines')
     product_id = fields.Many2one('product.product', string='Product', compute='_compute_product_id', store=True)
-    invoiced_qty = fields.Float(string='Invoiced Qty', compute='_compute_quantities', store=True)
-    returned_qty = fields.Float(string='Returned Qty', compute='_compute_quantities', store=True)
+    invoiced_qty = fields.Float(string='Total Invoiced Quantity', compute='_compute_total_invoiced_qty', store=True)
+    returned_qty = fields.Float(string='Total Return Quantity', compute='_compute_total_returned_qty', store=True)
     unit_price = fields.Float(string='Unit Price', compute='_compute_unit_price', store=True)
     total = fields.Float(string='Total', compute='_compute_total', store=True)
     stage_id = fields.Many2one('rma.stage', 
@@ -64,16 +66,27 @@ class CustomRma(models.Model):
     partner_longitude = fields.Float(string='Longitude', related='customer_id.partner_longitude', store=True)
     picking_id = fields.Many2one('stock.picking', string='Internal Transfer', tracking=True)
     credit_note_id = fields.Many2one('account.move', string='Credit Note', tracking=True)
+    claim_type = fields.Selection([
+        ('customer', 'Customer'),
+        ('supplier', 'Supplier')
+    ], string='Claim Type', default='customer')
+    company_street = fields.Char(related='company_id.street', string='Company Street')
+    company_city = fields.Char(related='company_id.city', string='Company City')
+    company_phone = fields.Char(related='company_id.phone', string='Company Phone')
 
     @api.depends('rma_line_ids.product_id')
     def _compute_product_id(self):
         for record in self:
             record.product_id = record.rma_line_ids[0].product_id if record.rma_line_ids else False
 
-    @api.depends('rma_line_ids.invoiced_qty', 'rma_line_ids.returned_qty')
-    def _compute_quantities(self):
+    @api.depends('rma_line_ids.invoiced_qty')
+    def _compute_total_invoiced_qty(self):
         for record in self:
             record.invoiced_qty = sum(record.rma_line_ids.mapped('invoiced_qty'))
+
+    @api.depends('rma_line_ids.returned_qty')
+    def _compute_total_returned_qty(self):
+        for record in self:
             record.returned_qty = sum(record.rma_line_ids.mapped('returned_qty'))
 
     @api.depends('rma_line_ids.unit_price')
@@ -108,11 +121,22 @@ class CustomRma(models.Model):
 
     def write(self, vals):
         if 'stage_id' in vals:
-            new_stage = self.env['rma.stage'].browse(vals['stage_id'])
             for record in self:
+                # Check if RMA print stage is completed and stock is available
                 if record.stage_id.id == self.env.ref('custom_rma.stage_awaiting_stock').id:
-                    if new_stage.id == self.env.ref('custom_rma.stage_awaiting_credit').id:
-                        raise ValidationError(_('You cannot move an RMA directly from Awaiting Stock Receipt to Awaiting Credit Note stage.'))
+                    # Check if stock is available for all products in RMA lines
+                    stock_available = True
+                    
+                    
+                    for line in record.rma_line_ids:
+                        stock_qty = line.product_id.qty_available
+                        if stock_qty < line.returned_qty:
+                            stock_available = False
+                            break
+                    
+                    if stock_available:
+                        vals['stage_id'] = self.env.ref('custom_rma.stage_awaiting_credit').id
+        
         if 'state' in vals:
             vals['state'] = vals['state']
         return super(CustomRma, self).write(vals)
@@ -124,58 +148,102 @@ class CustomRma(models.Model):
         return self.env['rma.stage'].search([], order='sequence')
 
     def action_create_transfer(self):
-        pass
-        # for rma in self:
-        #     if not rma.rma_line_ids:
-        #         raise UserError(_('Cannot create transfer without RMA lines.'))
+        for rma in self:
+            if not rma.rma_line_ids:
+                raise UserError(_('Cannot create transfer without RMA lines.'))
             
-        #     picking_type = self.env['stock.picking.type'].search([
-        #         ('code', '=', 'internal')
-        #     ], limit=1)
+            # Search for return operation type first
+            picking_type = self.env['stock.picking.type'].search([
+                ('code', '=', 'incoming'),
+                ('company_id', '=', rma.company_id.id),
+                ('warehouse_id.company_id', '=', rma.company_id.id),
+            ], limit=1)
 
-        #     vals = {
-        #         'picking_type_id': picking_type.id,
-        #         'location_id': picking_type.default_location_src_id.id,
-        #         'location_dest_id': picking_type.default_location_dest_id.id,
-        #         'origin': rma.name,
-        #     }
-        #     picking = self.env['stock.picking'].create(vals)
+            if not picking_type:
+                # Fallback to internal transfer if return type not found
+                picking_type = self.env['stock.picking.type'].search([
+                    ('code', '=', 'internal'),
+                    ('company_id', '=', rma.company_id.id),
+                    ('warehouse_id.company_id', '=', rma.company_id.id),
+                ], limit=1)
+
+            if not picking_type:
+                raise UserError(_('No suitable operation type found. Please configure your warehouse operations first.'))
+
+            # Get default locations from picking type
+            location_id = picking_type.default_location_src_id or \
+                         self.env['stock.location'].search([('usage', '=', 'customer')], limit=1)
+            location_dest_id = picking_type.default_location_dest_id or \
+                             self.env['stock.location'].search([('usage', '=', 'internal')], limit=1)
+
+            if not location_id or not location_dest_id:
+                raise UserError(_('Please configure source and destination locations in your operation type.'))
+
+            vals = {
+                'picking_type_id': picking_type.id,
+                'location_id': location_id.id,
+                'location_dest_id': location_dest_id.id,
+                'origin': rma.name,
+                'partner_id': rma.customer_id.id,
+                'move_type': 'direct',
+                'company_id': rma.company_id.id,
+            }
+            picking = self.env['stock.picking'].create(vals)
             
-        #     for line in rma.rma_line_ids:
-        #         self.env['stock.move'].create({
-        #             'name': line.product_id.name,
-        #             'product_id': line.product_id.id,
-        #             'product_uom_qty': line.returned_qty,
-        #             'product_uom': line.product_id.uom_id.id,
-        #             'picking_id': picking.id,
-        #             'location_id': picking_type.default_location_src_id.id,
-        #             'location_dest_id': picking_type.default_location_dest_id.id,
-        #         })
+            for line in rma.rma_line_ids:
+                move_vals = {
+                    'name': line.product_id.name,
+                    'product_id': line.product_id.id,
+                    'product_uom_qty': line.returned_qty,
+                    'product_uom': line.product_id.uom_id.id,
+                    'picking_id': picking.id,
+                    'location_id': location_id.id,
+                    'location_dest_id': location_dest_id.id,
+                    'picking_type_id': picking_type.id,
+                    'company_id': rma.company_id.id,
+                }
+                move = self.env['stock.move'].create(move_vals)
+                
+                # If lot/serial tracking is enabled and lot is specified
+                if line.lot_id and line.product_id.tracking != 'none':
+                    move._generate_serial_move_line(line.lot_id)
             
-        #     rma.picking_id = picking.id
-        #     rma.message_post(body=_("Internal transfer %s created") % picking.name)
-        #     return self._get_stock_picking_action(picking)
+            # Try to reserve immediately
+            picking.action_confirm()
+            picking.action_assign()
+            
+            rma.picking_id = picking.id
+            rma.message_post(body=_("Return transfer %s created") % picking.name)
+            return self._get_stock_picking_action(picking)
 
     def action_validate_transfer(self):
-        pass
-        # for rma in self:
-        #     if not rma.picking_id:
-        #         raise UserError(_('No transfer to validate.'))
-        #     if rma.picking_id.state != 'assigned':
-        #         raise UserError(_('Transfer must be ready to validate.'))
+        for rma in self:
+            if not rma.picking_id:
+                raise UserError(_('No transfer to validate.'))
             
-        #     rma.picking_id.button_validate()
-        #     if rma.stage_id == self.env.ref('custom_rma.stage_awaiting_stock'):
-        #         next_stage = self.env.ref('custom_rma.stage_awaiting_credit')
-        #         rma.write({'stage_id': next_stage.id})
+            picking = rma.picking_id
+            if picking.state == 'done':
+                raise UserError(_('Transfer is already validated.'))
+
+            # Simple validation flow
+            if picking.state == 'draft':
+                picking.action_confirm()
             
-        #     rma.message_post(body=_("Internal transfer %s validated") % rma.picking_id.name)
+            # Update stage if needed
+            stage_awaiting_stock = self.env.ref('custom_rma.stage_awaiting_stock', False)
+            stage_awaiting_credit = self.env.ref('custom_rma.stage_awaiting_credit', False)
+            
+            if stage_awaiting_stock:
+                if rma.stage_id.id == stage_awaiting_stock.id:
+                    rma.write({'stage_id': stage_awaiting_credit.id})
+                    
+            return picking.button_validate()
 
     def action_create_credit_note(self):
         for rma in self:
             if not rma.invoice_id:
-                raise UserError(_('Cannot create credit note without original invoice.'))
-            
+                raise UserError(_('Cannot create credit note without an invoice reference.'))
+                
             credit_note = rma.invoice_id._reverse_moves(
                 default_values_list=[{
                     'ref': _('Credit Note for %s') % rma.name,
@@ -211,11 +279,12 @@ class CustomRmaLine(models.Model):
     _name = 'custom.rma.line'
     _description = 'RMA Line'
 
-    rma_id = fields.Many2one('custom.rma', 
-        string='RMA Reference', 
-        ondelete='cascade',
-        required=True)
+    rma_id = fields.Many2one('custom.rma', string='RMA Reference', ondelete='cascade', required=True)
     product_id = fields.Many2one('product.product', string='Product', required=True)
+    description = fields.Text(related='product_id.description_sale', string='Description')
+    lot_id = fields.Many2one('stock.lot', string='Lot/Serial Number', 
+                            domain="[('product_id', '=', product_id)]")
+    expiry_date = fields.Date(string='Expiry Date', store=True)  # Changed from related field to regular field
     invoiced_qty = fields.Float(string='Invoiced Qty')
     returned_qty = fields.Float(string='Returned Qty')
     unit_price = fields.Float(string='Unit Price')
@@ -225,3 +294,15 @@ class CustomRmaLine(models.Model):
     def _compute_total(self):
         for line in self:
             line.total = line.returned_qty * line.unit_price
+
+    @api.onchange('product_id')
+    def _onchange_product_id(self):
+        if self.product_id:
+            self.unit_price = self.product_id.list_price
+
+    @api.onchange('lot_id')
+    def _onchange_lot_id(self):
+        if self.lot_id and hasattr(self.lot_id, 'use_expiration_date'):
+            self.expiry_date = self.lot_id.expiration_date
+        else:
+            self.expiry_date = False

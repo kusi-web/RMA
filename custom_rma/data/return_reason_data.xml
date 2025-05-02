@@ -1,0 +1,11 @@
+<odoo>
+    <record id="reason_picking_error" model="rma.return.reason">
+        <field name="name">Picking Error</field>
+    </record>
+    <record id="reason_customer_order_error" model="rma.return.reason">
+        <field name="name">Customer Order Error</field>
+    </record>
+    <record id="reason_order_delivered" model="rma.return.reason">
+        <field name="name">Order Delivered</field>
+    </record>
+</odoo>
