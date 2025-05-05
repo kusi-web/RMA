@@ -100,7 +100,7 @@
                 <!-- Footer Section -->
                 <div class="row">
                     <div class="col-6">
-                        <strong>Reason:</strong> <span t-field="doc.reason_id.name"/>
+                        <strong>Reason:</strong> <span t-field="doc.reason"/>
                     </div>
                     <div class="col-6">
                         <table class="table table-bordered" style="width: auto; float: right;">

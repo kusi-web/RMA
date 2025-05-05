@@ -20,12 +20,6 @@ class RmaTag(models.Model):
 
     name = fields.Char(string='Tag Name', required=True)
     color = fields.Integer(string='Color Index')
-    
-class ReturnReason(models.Model):
-    _name = 'rma.return.reason'
-    _description = 'Return Reason'
-
-    name = fields.Char(required=True)
 
 class CustomRma(models.Model):
     _name = 'custom.rma'
@@ -42,7 +36,7 @@ class CustomRma(models.Model):
     date = fields.Date(string='Date', default=fields.Date.context_today, tracking=True)
     user_id = fields.Many2one('res.users', string='Responsible', default=lambda self: self.env.user, tracking=True)
     currency_id = fields.Many2one('res.currency', string='Currency', default=lambda self: self.env.company.currency_id, tracking=True)
-    reason_id = fields.Many2one('rma.return.reason', string="Reason", tracking=True)
+    reason = fields.Text(string='Reason', tracking=True)
     state = fields.Selection([
         ('normal', 'In Progress'),
         ('done', 'Ready'),
@@ -118,27 +112,18 @@ class CustomRma(models.Model):
             self.rma_line_ids = lines
         else:
             self.rma_line_ids = False
-
+    
     def write(self, vals):
-        if 'stage_id' in vals:
-            for record in self:
-                # Check if RMA print stage is completed and stock is available
-                if record.stage_id.id == self.env.ref('custom_rma.stage_awaiting_stock').id:
-                    # Check if stock is available for all products in RMA lines
-                    stock_available = True
-                    
-                    
-                    for line in record.rma_line_ids:
-                        stock_qty = line.product_id.qty_available
-                        if stock_qty < line.returned_qty:
-                            stock_available = False
-                            break
-                    
-                    if stock_available:
-                        vals['stage_id'] = self.env.ref('custom_rma.stage_awaiting_credit').id
-        
-        if 'state' in vals:
-            vals['state'] = vals['state']
+        stage_awaiting_stock = self.env.ref('custom_rma.stage_awaiting_stock')
+        stage_awaiting_credit = self.env.ref('custom_rma.stage_awaiting_credit')
+
+        for record in self:
+            new_stage_id = vals.get('stage_id')
+            
+            if new_stage_id and record.stage_id.id == stage_awaiting_stock.id and new_stage_id == stage_awaiting_credit.id:
+                if not record.picking_id or record.picking_id.state != 'done':
+                    raise UserError(_("You cannot move to 'Awaiting Credit' until the transfer is validated."))
+
         return super(CustomRma, self).write(vals)
 
     @api.model
@@ -217,27 +202,32 @@ class CustomRma(models.Model):
             return self._get_stock_picking_action(picking)
 
     def action_validate_transfer(self):
-        for rma in self:
-            if not rma.picking_id:
-                raise UserError(_('No transfer to validate.'))
-            
-            picking = rma.picking_id
-            if picking.state == 'done':
-                raise UserError(_('Transfer is already validated.'))
+        self.ensure_one()
+        if not self.picking_id:
+            raise UserError(_('No transfer to validate.'))
+        
+        # Get the validation action
+        action = {
+            'name': _('Enter Transfer Details'),
+            'type': 'ir.actions.act_window',
+            'view_mode': 'form',
+            'res_model': 'stock.picking',
+            'res_id': self.picking_id.id,
+            'target': 'self',
+            'context': {
+                'active_model': 'stock.picking',
+                'active_ids': [self.picking_id.id],
+            }
+        }
 
-            # Simple validation flow
-            if picking.state == 'draft':
-                picking.action_confirm()
-            
-            # Update stage if needed
-            stage_awaiting_stock = self.env.ref('custom_rma.stage_awaiting_stock', False)
-            stage_awaiting_credit = self.env.ref('custom_rma.stage_awaiting_credit', False)
-            
-            if stage_awaiting_stock:
-                if rma.stage_id.id == stage_awaiting_stock.id:
-                    rma.write({'stage_id': stage_awaiting_credit.id})
-                    
-            return picking.button_validate()
+        # If picking is done, update stage
+        if self.picking_id.state == 'done':
+            current_stage = self.env.ref('custom_rma.stage_awaiting_stock')
+            next_stage = self.env.ref('custom_rma.stage_awaiting_credit')
+            if self.stage_id.id == current_stage.id:
+                self.write({'stage_id': next_stage.id})
+        
+        return action
 
     def action_create_credit_note(self):
         for rma in self:

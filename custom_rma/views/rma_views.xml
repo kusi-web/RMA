@@ -54,7 +54,7 @@
                             <field name="user_id"/>
                             <field name="tag_ids" widget="many2many_tags" options="{'color_field': 'color'}"/>
                             <field name="company_id"/>
-                            <field name="reason_id" options="{'no_create': False}" placeholder="Select or create reason..."/>
+                            <field name="reason"/>
                         </group>
                     </group>
                     <notebook>
@@ -108,7 +108,7 @@
                 <field name="stage_id" options='{"group_by_tooltip": {"description": "Description"}}'/>
                 <field name="state"/>
                 <field name="total"/>
-                <field name="reason_id"/>
+                <field name="reason"/>
                 <field name="tag_ids"/>
                 <field name="currency_id"/>
                 <field name="user_id"/>

@@ -9,7 +9,6 @@
     'data': [
         'security/ir.model.access.csv',
         'data/rma_stage_data.xml',
-        'data/return_reason_data.xml',
         'report/rma_report_template.xml',
         'views/rma_views.xml',
         'views/rma_menu_views.xml',
