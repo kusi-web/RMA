@@ -220,13 +220,6 @@ class CustomRma(models.Model):
             }
         }
 
-        # If picking is done, update stage
-        if self.picking_id.state == 'done':
-            current_stage = self.env.ref('custom_rma.stage_awaiting_stock')
-            next_stage = self.env.ref('custom_rma.stage_awaiting_credit')
-            if self.stage_id.id == current_stage.id:
-                self.write({'stage_id': next_stage.id})
-        
         return action
 
     def action_create_credit_note(self):
