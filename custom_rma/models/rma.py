@@ -219,19 +219,38 @@ class CustomRma(models.Model):
                 'active_ids': [self.picking_id.id],
             }
         }
-
+        
         return action
 
     def action_create_credit_note(self):
         for rma in self:
             if not rma.invoice_id:
                 raise UserError(_('Cannot create credit note without an invoice reference.'))
-                
-            credit_note = rma.invoice_id._reverse_moves(
-                default_values_list=[{
-                    'ref': _('Credit Note for %s') % rma.name,
-                }]
-            )
+
+            # Prepare credit note lines based on returned quantities
+            invoice_lines = []
+            for rma_line in rma.rma_line_ids:
+                if rma_line.returned_qty > 0:
+                    invoice_lines.append((0, 0, {
+                        'product_id': rma_line.product_id.id,
+                        'name': rma_line.product_id.name,
+                        'quantity': rma_line.returned_qty,
+                        'price_unit': rma_line.unit_price,
+                    }))
+            
+            if not invoice_lines:
+                raise UserError(_('No items to refund. Please enter returned quantities.'))
+
+            # Create credit note
+            credit_note = self.env['account.move'].create({
+                'move_type': 'out_refund',
+                'invoice_origin': rma.invoice_id.name,
+                'partner_id': rma.customer_id.id,
+                'ref': _('Credit Note for %s') % rma.name,
+                'invoice_line_ids': invoice_lines,
+                'currency_id': rma.invoice_id.currency_id.id,
+            })
+            
             rma.credit_note_id = credit_note.id
             if rma.stage_id == self.env.ref('custom_rma.stage_awaiting_credit'):
                 next_stage = self.env.ref('custom_rma.stage_closed')
